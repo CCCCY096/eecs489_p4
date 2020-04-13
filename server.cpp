@@ -6,6 +6,10 @@
 #include <unordered_set>
 #include <iostream>
 #include <stdlib.h>
+#include <sys/socket.h>
+#include <unistd.h>
+#include <arpa/inet.h>
+
 extern boost::mutex cout_lock;
 
 std::unordered_map<std::string, std::string> users;
@@ -30,8 +34,22 @@ int main( int argc, char* argv[] ){
     }
 
     // Create the listening socket
-    int socket_fd = create_listen_socket(server_port);
-    
+    int listen_sock = create_listen_socket(server_port);
+    // Start to listen to requests. Queue size is 30.
+    listen(listen_sock, 30);
+
+    // Serve the requests
+    while (true)
+    {
+        // Create connection
+        connect_sock = accept(listen_sock, 0, 0);
+        if (connet_sock == -1) continue; // If the connection fails, ignore this request
+
+        // Handle the connection
+    }
+
+
+
     return 0;
 }
 
@@ -52,8 +70,10 @@ int create_listen_socket(int& server_port)
     if (bind(sock, (struct sockaddr*) &addr, sizeof(addr)) == -1) return -1;
 
     // Get the port we actually use. Set the server_port var if necessary
-    server_port = get_port_number(socket_fd);
+    server_port = ntohs(getsockname(socket_fd));
+    cout_lock.lock();
     std::cout << "\n@@@ port " << server_port << std::endl;
+    cout_lock.unlock();
     
     return socket_fd;
 }
