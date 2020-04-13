@@ -1,7 +1,7 @@
 CC=g++ -g -Wall
 
 # List of source files for your file server
-FS_SOURCES=file1.cpp file2.cpp
+FS_SOURCES=server.cpp
 
 # Generate the names of the file server's object files
 FS_OBJS=${FS_SOURCES:.cpp=.o}
