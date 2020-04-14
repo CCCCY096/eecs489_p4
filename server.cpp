@@ -15,11 +15,14 @@
 #include <netinet/in.h>
 #include <netinet/ip.h> 
 extern boost::mutex cout_lock;
+boost::mutex listen_sock_lock;
+boost::mutex users_lock;
+
 
 std::unordered_map<std::string, std::string> users;
 std::unordered_map<unsigned, unsigned> session_seq;
 std::unordered_set<unsigned> avail_disk_blocks;
-unsigned session_num;
+unsigned session_num = 0;
 int server_port = 0;
 int main( int argc, char* argv[] ){
     std::string username, password;
@@ -56,11 +59,13 @@ int main( int argc, char* argv[] ){
     // Serve the requests
     while (true)
     {
+        boost::lock_guard<boost::mutex> lock(listen_sock_lock);
         // Create connection
         int connect_sock = accept(listen_sock, 0, 0);
         if (connect_sock == -1) continue; // If the connection fails, ignore this request
         //Boost create thread to handle the request
-        
+        boost::thread worker_thread(handle_request, connect_sock);
+        worker_thread.detach();
     }
 
 
@@ -110,12 +115,12 @@ int handle_request(int connect_sock){
     char request_buf[request_size];
     char request_buf_decrpt[request_size];
     recv(connect_sock, request_buf, sizeof(request_buf), MSG_WAITALL );
-    // Error handling: if no user
+    // Error handling: if no user. Need lock on map?
+    users_lock.lock();
     int decrypted_len = fs_decrypt(users[user].c_str(), (void*) request_buf, request_size, request_buf_decrpt);
+    users_lock.unlock();
     //Error handling: fail to decrypt
     std::string request_data(request_buf_decrpt, decrypted_len);
-
-
     std::stringstream request_ss(request_data);
     std::string request_type;
     unsigned session, seq;
@@ -140,4 +145,9 @@ int handle_request(int connect_sock){
     {
 
     }
+}
+
+int handle_session(const string& user, unsigned seq)
+{
+    
 }
