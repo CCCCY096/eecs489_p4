@@ -8,9 +8,12 @@
 #include <stdlib.h>
 #include <sys/socket.h>
 #include <unistd.h>
-#include <arpa/inet.h>
+#include <sstream>
+// #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
+#include <netinet/in.h>
+#include <netinet/ip.h> 
 extern boost::mutex cout_lock;
 
 std::unordered_map<std::string, std::string> users;
@@ -36,8 +39,19 @@ int main( int argc, char* argv[] ){
 
     // Create the listening socket
     int listen_sock = create_listen_socket(server_port);
+    if (listen_sock == -1)
+    {
+        cout_lock.lock();
+        std::cout << "Failed to create listening socket" << std::endl;
+        cout_lock.unlock();
+    }
     // Start to listen to requests. Queue size is 30.
     listen(listen_sock, 30);
+
+    // Cout the port number
+    cout_lock.lock();
+    std::cout << "\n@@@ port " << server_port << std::endl;
+    cout_lock.unlock();
 
     // Serve the requests
     while (true)
@@ -45,8 +59,8 @@ int main( int argc, char* argv[] ){
         // Create connection
         int connect_sock = accept(listen_sock, 0, 0);
         if (connect_sock == -1) continue; // If the connection fails, ignore this request
-
-        // Handle the connection
+        //Boost create thread to handle the request
+        
     }
 
 
@@ -76,8 +90,54 @@ int create_listen_socket(int& server_port)
         return -1;
     else 
         server_port = ntohs(addr.sin_port);
-    cout_lock.lock();
-    std::cout << "\n@@@ port " << server_port << std::endl;
-    cout_lock.unlock();
     return socket_fd;
+}
+
+int handle_request(int connect_sock){
+    // Handle the connection
+    std::string data;
+    char buf[1];
+    do{
+        int n = recv(connect_sock, buf, sizeof(buf), 0);
+        data += buf[0];
+    } while (buf[0] != '\0');
+    
+    std::stringstream ss(data);
+    std::string user;
+    unsigned request_size;
+    ss >> user >> request_size;
+    //Error handling: check header correctness
+    char request_buf[request_size];
+    char request_buf_decrpt[request_size];
+    recv(connect_sock, request_buf, sizeof(request_buf), MSG_WAITALL );
+    // Error handling: if no user
+    int decrypted_len = fs_decrypt(users[user].c_str(), (void*) request_buf, request_size, request_buf_decrpt);
+    //Error handling: fail to decrypt
+    std::string request_data(request_buf_decrpt, decrypted_len);
+
+
+    std::stringstream request_ss(request_data);
+    std::string request_type;
+    unsigned session, seq;
+    request_ss >> request_type >> session >> seq;
+    if (request_type == "FS_SESSION")
+    {
+
+    }
+    else if (request_type == "FS_READBLOCK")
+    {
+
+    }
+    else if (request_type == "FS_WRITEBLOCK")
+    {
+
+    }
+    else if (request_type == "FS_CREATE")
+    {
+
+    }
+    else if (request_type == "FS_DELETE")
+    {
+
+    }
 }
