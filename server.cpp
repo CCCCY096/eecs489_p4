@@ -9,14 +9,15 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <arpa/inet.h>
-
+#include <sys/types.h>
+#include <sys/socket.h>
 extern boost::mutex cout_lock;
 
 std::unordered_map<std::string, std::string> users;
 std::unordered_map<unsigned, unsigned> session_seq;
 std::unordered_set<unsigned> avail_disk_blocks;
 unsigned session_num;
-int server_port;
+int server_port = 0;
 int main( int argc, char* argv[] ){
     std::string username, password;
     while( std::cin >> username >> password ){
@@ -42,14 +43,14 @@ int main( int argc, char* argv[] ){
     while (true)
     {
         // Create connection
-        connect_sock = accept(listen_sock, 0, 0);
-        if (connet_sock == -1) continue; // If the connection fails, ignore this request
+        int connect_sock = accept(listen_sock, 0, 0);
+        if (connect_sock == -1) continue; // If the connection fails, ignore this request
 
         // Handle the connection
     }
 
 
-
+    close(listen_sock);
     return 0;
 }
 
@@ -63,17 +64,20 @@ int create_listen_socket(int& server_port)
 
     // Pass arg to the socket
     struct sockaddr_in addr;
+    socklen_t len = sizeof(addr);
     memset(&addr, 0, sizeof(addr));
     addr.sin_family = AF_INET;
     addr.sin_addr.s_addr = htonl(INADDR_ANY);
     addr.sin_port = htons(server_port);
-    if (bind(sock, (struct sockaddr*) &addr, sizeof(addr)) == -1) return -1;
+    if (bind(socket_fd, (struct sockaddr*) &addr, len) == -1) return -1;
 
     // Get the port we actually use. Set the server_port var if necessary
-    server_port = ntohs(getsockname(socket_fd));
+    if (getsockname(socket_fd, (struct sockaddr*) &addr, &len) == -1)
+        return -1;
+    else 
+        server_port = ntohs(addr.sin_port);
     cout_lock.lock();
     std::cout << "\n@@@ port " << server_port << std::endl;
     cout_lock.unlock();
-    
     return socket_fd;
 }
