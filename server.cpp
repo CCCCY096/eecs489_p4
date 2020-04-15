@@ -9,6 +9,7 @@
 #include <sys/socket.h>
 #include <unistd.h>
 #include <sstream>
+#include <vector>
 // #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
@@ -22,8 +23,26 @@ std::unordered_map<std::string, std::unordered_set<unsigned> > user_session;
 std::unordered_map<std::string, std::string> users;
 std::unordered_map<unsigned, unsigned> session_seq;
 std::unordered_set<unsigned> avail_disk_blocks;
+std::unordered_map<unsigned, bool> disk_blocks;
 unsigned session_num = 0;
 int server_port = 0;
+
+void get_fs_init_blocks( u_int32_t curr_inode_block ){
+    fs_inode curr_inode;
+    disk_readblock(curr_inode_block, &curr_inode);
+    for( unsigned i = 0; i < curr_inode.size; i++ ){
+        avail_disk_blocks.erase( curr_inode.blocks[i] );
+        disk_blocks[ curr_inode.blocks[i] ] = true;
+        if( curr_inode.type == 'f' )
+            return;
+        fs_direntry entries[8];
+        disk_readblock( curr_inode.blocks[i], entries );
+        for( unsigned j = 0; j < FS_MAXFILEBLOCKS; j++){
+            if( entries[j].inode_block != 0)
+                get_fs_init_blocks( entries[j].inode_block );
+        }   
+    }
+}
 int main( int argc, char* argv[] ){
     std::string username, password;
     while( std::cin >> username >> password ){
@@ -40,6 +59,10 @@ int main( int argc, char* argv[] ){
         exit(1);
     }
 
+    //read disk blocks
+    fs_inode root_inode;
+    disk_readblock(0, &root_inode); 
+    
     // Create the listening socket
     int listen_sock = create_listen_socket(server_port);
     if (listen_sock == -1)
@@ -142,6 +165,9 @@ void handle_request(int connect_sock){
         return;
     if (request_type == "FS_SESSION")
     {
+        reconstrunction = "FS_SESSION " + std::to_string(session) + ' ' +  std::to_string(seq) + '\0';
+        if (reconstrunction != request_data)
+            return;
         //create a session lock needed?
         user_session[user].insert(session_num);
         session_seq[session_num] = seq;
@@ -156,6 +182,10 @@ void handle_request(int connect_sock){
         std::string pathname;
         unsigned block;
         request_ss >> pathname >> block;
+        reconstrunction = "FS_READBLOCK " + std::to_string(session) + ' ' +
+          std::to_string(seq) + ' ' + pathname + ' ' + std::to_string(block) + '\0';
+        if (reconstrunction != request_data)
+            return;
 
     }
     else if (request_type == "FS_WRITEBLOCK")
@@ -166,15 +196,33 @@ void handle_request(int connect_sock){
         unsigned curr_len = 13 + std::to_string(session).size() 
         + std::to_string(seq).size() + std::to_string(block).size() + pathname.size() + 4 + 1;
         std::string text = request_data.substr(curr_len, request_size - curr_len); 
+        reconstrunction = "FS_WRITEBLOCK " + std::to_string(session) + ' ' +
+          std::to_string(seq) + ' ' + pathname + ' ' + std::to_string(block) + '\0' + text;
+        if (reconstrunction != request_data)
+            return;
 
     }
     else if (request_type == "FS_CREATE")
     {
-
+        std::string pathname;
+        char file_type;
+        request_ss >> pathname >> file_type;
+        reconstrunction = "FS_CREATE " + std::to_string(session) + ' ' +
+          std::to_string(seq) + ' ' + pathname + ' ' + file_type + '\0';
+        if (reconstrunction != request_data)
+            return;
     }
     else if (request_type == "FS_DELETE")
     {
-
+        std::string pathname;
+        request_ss >> pathname;
+        std::cout << "delete pathname len: " << pathname.size() << std::endl;
+        pathname = std::string(pathname.c_str());
+        std::cout << "delete pathname len: " << pathname.size() << std::endl;
+        reconstrunction = "FS_CREATE " + std::to_string(session) + ' ' +
+          std::to_string(seq) + ' ' + pathname + '\0';
+        if (reconstrunction != request_data)
+            return;
     }
 }
 
