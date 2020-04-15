@@ -35,11 +35,14 @@ void get_fs_init_blocks( u_int32_t curr_inode_block ){
         disk_blocks[ curr_inode.blocks[i] ] = true;
         if( curr_inode.type == 'f' )
             return;
-        fs_direntry entries[8];
+        fs_direntry entries[FS_BLOCKSIZE/sizeof(fs_direntry)];
         disk_readblock( curr_inode.blocks[i], entries );
-        for( unsigned j = 0; j < FS_MAXFILEBLOCKS; j++){
-            if( entries[j].inode_block != 0)
+        for( unsigned j = 0; j < FS_BLOCKSIZE/sizeof(fs_direntry); j++){
+            if( entries[j].inode_block != 0){
+                avail_disk_blocks.erase( entries[j].inode_block );
+                disk_blocks[ entries[j].inode_block ] = true;
                 get_fs_init_blocks( entries[j].inode_block );
+            }
         }   
     }
 }
@@ -60,8 +63,12 @@ int main( int argc, char* argv[] ){
     }
 
     //read disk blocks
-    fs_inode root_inode;
-    disk_readblock(0, &root_inode); 
+    for( unsigned i = 1; i < FS_DISKSIZE; i++){
+        avail_disk_blocks.insert(i);
+        disk_blocks[i] = false;
+    }
+    disk_blocks[0] = true;
+    get_fs_init_blocks(0);
     
     // Create the listening socket
     int listen_sock = create_listen_socket(server_port);
@@ -226,6 +233,45 @@ void handle_request(int connect_sock){
     }
 }
 
+void fs_read_handler(std::string pathname, std::string& user){
+    pathname = pathname.substr(pathname.find('/') + 1);
+    // std::string curr_level_name = pathname.substr(0, pathname.find('/'));
+    // pathname = pathname.substr(pathname.find('/') + 1);
+    std::string next_level_name;
+    unsigned curr_block = 0;
+    fs_inode curr_inode;
+    while(pathname != ""){
+        next_level_name = pathname.substr(0, pathname.find('/'));
+        pathname = pathname.substr(pathname.find('/') + 1);
+        bool path_found = false;
+        disk_readblock(curr_block, &curr_inode);
+        //invalid owner
+        if( std::string(curr_inode.owner, FS_MAXUSERNAME + 1) != "" 
+        && std::string(curr_inode.owner, FS_MAXUSERNAME + 1) != user )
+            return;
+        for( unsigned i = 0; i < curr_inode.size; i++ ){
+            fs_direntry entries[FS_BLOCKSIZE/sizeof(fs_direntry)];
+            disk_readblock(curr_inode.blocks[i], entries);
+            for ( unsigned j = 0; j < FS_BLOCKSIZE/sizeof(fs_direntry); j++){
+                if( !entries[j].inode_block )
+                    continue;
+                if( !strcmp(entries[j].name, next_level_name.c_str())){
+                    curr_block = entries[j].inode_block;
+                    path_found = true;
+                    break;
+                }
+            }
+            if(path_found)
+                break;
+        }
+        if(!path_found)
+            return;
+    }
+
+    // do{
+    //     std::string curr_level_name    
+    // }while(pathname != "");
+}
 // int handle_session(const string& user, unsigned seq)
 // {
     
