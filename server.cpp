@@ -18,7 +18,7 @@ extern boost::mutex cout_lock;
 boost::mutex listen_sock_lock;
 boost::mutex users_lock;
 
-
+std::unordered_map<std::string, std::unordered_set<unsigned> > user_session;
 std::unordered_map<std::string, std::string> users;
 std::unordered_map<unsigned, unsigned> session_seq;
 std::unordered_set<unsigned> avail_disk_blocks;
@@ -67,8 +67,6 @@ int main( int argc, char* argv[] ){
         boost::thread worker_thread(handle_request, connect_sock);
         worker_thread.detach();
     }
-
-
     close(listen_sock);
     return 0;
 }
@@ -98,7 +96,19 @@ int create_listen_socket(int& server_port)
     return socket_fd;
 }
 
-int handle_request(int connect_sock){
+int session_owner_check (std::string& type, std::string& user, unsigned session, unsigned seq){
+    if( type != "FS_SESSION"){
+        if(user_session.find(user) == user_session.end())
+            return -1;
+        if(user_session[user].find(session) == user_session[user].end())
+            return -1;
+    }
+    if( session_seq.find(session) != session_seq.end() && session_seq[session] <= seq )
+        return -1;
+    return 0;
+}
+
+void handle_request(int connect_sock){
     // Handle the connection
     std::string data;
     char buf[1];
@@ -123,18 +133,39 @@ int handle_request(int connect_sock){
     std::string request_data(request_buf_decrpt, decrypted_len);
     std::stringstream request_ss(request_data);
     std::string request_type;
+    std::string response = "";
+    std::string reconstrunction = "";
     unsigned session, seq;
     request_ss >> request_type >> session >> seq;
+    int ck1 = session_owner_check(request_type ,user, session, seq);
+    if(ck1 < 0)
+        return;
     if (request_type == "FS_SESSION")
     {
-
+        //create a session lock needed?
+        user_session[user].insert(session_num);
+        session_seq[session_num] = seq;
+        response = std::to_string(session_num++) + ' ' + std::to_string(seq) + '\0';
+        //send response
+        send(connect_sock, response.c_str(), response.size(), MSG_NOSIGNAL);
+        //close socket
+        close(connect_sock);
     }
     else if (request_type == "FS_READBLOCK")
     {
+        std::string pathname;
+        unsigned block;
+        request_ss >> pathname >> block;
 
     }
     else if (request_type == "FS_WRITEBLOCK")
     {
+        std::string pathname;
+        unsigned block;
+        request_ss >> pathname >> block;
+        unsigned curr_len = 13 + std::to_string(session).size() 
+        + std::to_string(seq).size() + std::to_string(block).size() + pathname.size() + 4 + 1;
+        std::string text = request_data.substr(curr_len, request_size - curr_len); 
 
     }
     else if (request_type == "FS_CREATE")
@@ -147,7 +178,7 @@ int handle_request(int connect_sock){
     }
 }
 
-int handle_session(const string& user, unsigned seq)
-{
+// int handle_session(const string& user, unsigned seq)
+// {
     
-}
+// }
