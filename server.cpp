@@ -219,6 +219,7 @@ void handle_request(int connect_sock){
           std::to_string(seq) + ' ' + pathname + ' ' + file_type + '\0';
         if (reconstrunction != request_data)
             return;
+        fs_create_handler(pathname, user, file_type, session, seq, connect_sock);
     }
     else if (request_type == "FS_DELETE")
     {
@@ -231,6 +232,7 @@ void handle_request(int connect_sock){
           std::to_string(seq) + ' ' + pathname + '\0';
         if (reconstrunction != request_data)
             return;
+        fs_delete_handler(pathname, user, session, seq, connect_sock );
     }
 }
 
@@ -301,7 +303,6 @@ void fs_write_handler(const std::string& text, std::string pathname, std::string
     unsigned curr_block = 0;
     unsigned prev_block = 0;
     fs_inode curr_inode;
-    char read_buf[FS_BLOCKSIZE];
     if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return;
     boost::unique_lock(*fs_mutex_map[curr_block]);
     disk_readblock(curr_block, &curr_inode);
@@ -341,19 +342,19 @@ void fs_create_handler(std::string pathname, std::string& user, char type, unsig
     strcpy(new_dirorfile.owner, user.c_str());
     new_dirorfile.type = type;
     new_dirorfile.size = 0;
-    //init completed
-    fs_inode curr_inode;
-    char read_buf[FS_BLOCKSIZE];
-    if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return;
-    boost::unique_lock(*fs_mutex_map[curr_block]);
     if(!avail_disk_blocks.size())
         return;
+    //init completed
+    fs_inode curr_inode;
+    if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return;
+    boost::unique_lock(*fs_mutex_map[curr_block]);
     unsigned avail_block_num = 0;
     for(avail_block_num = 1; avail_block_num < FS_BLOCKSIZE; avail_block_num++){
         if( avail_disk_blocks.find(avail_block_num) != avail_disk_blocks.end())
             break;
     }
     disk_readblock(curr_block, &curr_inode);
+    fs_mutex_map[prev_block]->unlock_shared();
     bool file_created = false;
     for( unsigned i = 0; i < curr_inode.size; i++){
         fs_direntry entries[FS_BLOCKSIZE/sizeof(fs_direntry)];
@@ -392,8 +393,66 @@ void fs_create_handler(std::string pathname, std::string& user, char type, unsig
     return;
 }
 
-void fs_delete_handler(std::string pathname, std::string& user, char type, unsigned session, unsigned seq, int connect_sock){
-    
+void fs_delete_handler(std::string pathname, std::string& user, unsigned session, unsigned seq, int connect_sock){
+    pathname = pathname.substr(pathname.find('/') + 1);
+    std::string delete_name = pathname.substr(pathname.rfind('/') + 1);
+    pathname = pathname.substr(0, pathname.rfind('/'));
+    pathname += '/';
+    unsigned curr_block = 0;
+    unsigned delete_block = 0;
+    unsigned prev_block = 0;
+    fs_inode curr_inode;
+    fs_inode to_delete_inode;
+    if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return;
+    boost::unique_lock(*fs_mutex_map[curr_block]);
+    disk_readblock(curr_block, &curr_inode);
+    fs_mutex_map[prev_block]->unlock_shared();
+    bool path_found = false;
+    unsigned parent_file_block_index = 0;
+    unsigned delete_index = 0;
+    fs_direntry entries[FS_BLOCKSIZE/sizeof(fs_direntry)];
+    for( parent_file_block_index = 0; parent_file_block_index < curr_inode.size; parent_file_block_index++ ){
+        disk_readblock(curr_inode.blocks[parent_file_block_index], entries);
+        for ( unsigned j = 0; j < FS_BLOCKSIZE/sizeof(fs_direntry); j++){
+            if( !entries[j].inode_block )
+                continue;
+            if( !strcmp(entries[j].name, delete_name.c_str())){
+                delete_index = j;
+                delete_block = entries[j].inode_block;
+                path_found = true;
+                break;
+            }
+            if(path_found)
+                break;
+        }
+    }
+    if(!path_found) return;
+    boost::unique_lock(*fs_mutex_map[delete_block]);
+    disk_readblock(delete_block, &to_delete_inode);
+    if(to_delete_inode.type == 'd' && to_delete_inode.size)
+        return;
+    entries[delete_index].inode_block = 0;
+    bool entries_empty = true;
+    for ( unsigned j = 0; j < FS_BLOCKSIZE/sizeof(fs_direntry); j++){
+        if (entries[j].inode_block){
+            entries_empty &= false;
+            break;
+        }
+    }
+    if( entries_empty ){
+        for( unsigned i = parent_file_block_index; i < curr_inode.size - 1; i++ ){
+            curr_inode.blocks[ i ] = curr_inode.blocks[ i + 1 ];
+        }
+        curr_inode.blocks[ curr_inode.size - 1 ] = 0;
+        curr_inode.size--;
+        disk_writeblock(curr_block, &curr_inode);
+        disk_writeblock(parent_file_block_index, entries);
+    }else{
+        disk_writeblock(parent_file_block_index, entries);
+    }
+    std::string response = std::to_string(session) + ' ' + std::to_string(seq) + '\0';
+    send(connect_sock, response.c_str(), response.size(), MSG_NOSIGNAL);
+    return;
 }
 
 unsigned find_avail_blocks(){
