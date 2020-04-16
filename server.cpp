@@ -381,11 +381,18 @@ void fs_create_handler(std::string pathname, std::string& user, char type, unsig
         avail_disk_blocks.erase(avail_block_num);
         unsigned parent_block_num = find_avail_blocks();
         assert(parent_block_num != 0);
+        avail_disk_blocks.erase(parent_block_num);
         strcpy(new_entries[0].name, new_name.c_str());
-        curr_inode.blocks[++curr_inode.size];
-        
+        curr_inode.blocks[++curr_inode.size] = parent_block_num;
+        disk_writeblock(new_entries[0].inode_block, &new_dirorfile);
+        disk_writeblock(curr_inode.blocks[curr_inode.size], new_entries);
     }
-    
+    std::string response = std::to_string(session) + ' ' + std::to_string(seq) + '\0';
+    send(connect_sock, response.c_str(), response.size(), MSG_NOSIGNAL);
+    return;
+}
+
+void fs_delete_handler(std::string pathname, std::string& user, char type, unsigned session, unsigned seq, int connect_sock){
     
 }
 
