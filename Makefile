@@ -14,7 +14,7 @@ fs: ${FS_OBJS} libfs_server.o
 	${CC} -o $@ $^ -lboost_thread -lboost_system -pthread -ldl
 
 # Compile a client program
-app: test1.cpp libfs_client.o
+app: test2.cpp libfs_client.o
 	${CC} -o $@ $^
 
 # Generic rules for compiling a source file to an object file

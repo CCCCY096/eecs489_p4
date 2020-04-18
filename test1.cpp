@@ -27,6 +27,10 @@ int main(int argc, char *argv[])
     fs_create("user1", "password1", session, seq++, "/dir/file", 'f');
     fs_writeblock("user1", "password1", session, seq++, "/dir/file", 0, writedata);
     fs_readblock("user1", "password1", session, seq++, "/dir/file", 0, readdata);
+    // for (unsigned i = 0; i < FS_BLOCKSIZE; i++)
+    //     cout << readdata[i];
+    // // cout<<std::endl;
     fs_delete("user1", "password1", session, seq++, "/dir/file");
     fs_delete("user1", "password1", session, seq++, "/dir");
+    return 0;
 }
