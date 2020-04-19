@@ -1,5 +1,7 @@
 #include <iostream>
 #include <cstdlib>
+#include <stdio.h>
+#include <string.h>
 #include "fs_client.h"
 
 using std::cout;
@@ -11,7 +13,10 @@ int main(int argc, char *argv[])
     int server_port;
     unsigned int session,session2, seq=0;
     const char *writedata = "We hold these truths to be self-evident, that all men are created equal, that they are endowed by their Creator with certain unalienable Rights, that among these are Life, Liberty and the pursuit of Happiness. -- That to secure these rights, Governments are instituted among Men, deriving their just powers from the consent of the governed, -- That whenever any Form of Government becomes destructive of these ends, it is the Right of the People to alter or to abolish it, and to institute new Government, laying its foundation on such principles and organizing its powers in such form, as to them shall seem most likely to effect their Safety and Happiness.";
-    const char *writedata2 = "Short.";
+    char buf[FS_BLOCKSIZE];
+    memset(buf, 0, FS_BLOCKSIZE);
+    const char *writedata2 = "This is a short message.";
+    memcpy(buf, writedata2, strlen(writedata2));
     char readdata[FS_BLOCKSIZE];
 
     if (argc != 3) {
@@ -43,5 +48,6 @@ int main(int argc, char *argv[])
     fs_delete("user1", "password1", session2, seq++, "/dir/eecs482/eecs482");
     fs_delete("user1", "password1", session, seq++, "/dir/eecs482/p1");
     fs_delete("user1", "password1", session, seq++, "/dir/eecs482");
+    // return 0;
     return 0;
 }
