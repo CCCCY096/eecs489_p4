@@ -42,13 +42,14 @@ int main(int argc, char *argv[])
     //READBLOCK error test
     //path invalid
     fs_readblock("user1", "password1", session1, 4, " doc", 0, readdata);
-    fs_readblock("user1", "password1", session1, 5, "doc", 0, readdata);
-    fs_readblock("user1", "password1", session1, 6, "doc/", 0, readdata);
-    fs_readblock("user1", "password1", session1, 7, "/", 0, readdata);
+    fs_readblock("user1", "password1", session1, 4, "doc", 0, readdata);
+    fs_readblock("user1", "password1", session1, 4, "doc/", 0, readdata);
+    fs_readblock("user1", "password1", session1, 4, "/", 0, readdata);
+
     //path not exist
-    fs_readblock("user1", "password1", session1, 8, "/doc1", 0, readdata);
-    fs_readblock("user1", "password1", session1, 9, "/dir/file", 0, readdata);
-    fs_readblock("user1", "password1", session1, 10, "/dir/file/stuff", 0, readdata);
+    fs_readblock("user1", "password1", session1, 4, "/doc1", 0, readdata);
+    fs_readblock("user1", "password1", session1, 5, "/dir/file", 0, readdata);
+    fs_readblock("user1", "password1", session1, 6, "/dir/file/stuff", 0, readdata);
 
     //create another file
     fs_session("user2", "password2", &session3, 0);
@@ -56,26 +57,26 @@ int main(int argc, char *argv[])
     fs_writeblock("user2", "password2", session3, 2, "/game", 0, writedata);
 
     //no permission
-    fs_readblock("user1", "password1", session1, 11, "/game", 0, readdata);
+    fs_readblock("user1", "password1", session1, 7, "/game", 0, readdata);
 
     //offset out of range
-    fs_readblock("user1", "password1", session1, 12, "/doc", 1, readdata);
+    fs_readblock("user1", "password1", session1, 8, "/doc", 1, readdata);
 
     //WRITEBLOCK error test
     //invalid path
-    fs_writeblock("user1", "password1", session1, 13, " doc", 0, writedata);
-    fs_writeblock("user1", "password1", session1, 14, "doc", 0, writedata);
-    fs_writeblock("user1", "password1", session1, 15, "doc/", 0, writedata);
-    fs_writeblock("user1", "password1", session1, 16, "/", 0, writedata);
+    fs_writeblock("user1", "password1", session1, 9, " doc", 0, writedata);
+    fs_writeblock("user1", "password1", session1, 9, "doc", 0, writedata);
+    fs_writeblock("user1", "password1", session1, 9, "doc/", 0, writedata);
+    fs_writeblock("user1", "password1", session1, 9, "/", 0, writedata);
     //not a file
-    fs_writeblock("user1", "password1", session1, 17, "/dir", 0, writedata);
+    fs_writeblock("user1", "password1", session1, 9, "/dir", 0, writedata);
     //pathname not exist
-    fs_writeblock("user1", "password1", session1, 18, "/doc1", 0, writedata);
-    fs_writeblock("user1", "password1", session1, 19, "/dir/file", 0, writedata);
-    fs_writeblock("user1", "password1", session1, 20, "/dir/file/stuff", 0, writedata);
+    fs_writeblock("user1", "password1", session1, 10, "/doc1", 0, writedata);
+    fs_writeblock("user1", "password1", session1, 11, "/dir/file", 0, writedata);
+    fs_writeblock("user1", "password1", session1, 12, "/dir/file/stuff", 0, writedata);
     //no permission
-    fs_writeblock("user1", "password1", session1, 21, "/game", 0, writedata);
+    fs_writeblock("user1", "password1", session1, 13, "/game", 0, writedata);
     //out of range
-    fs_writeblock("user1", "password1", session1, 22, "/doc", 2, writedata);
+    fs_writeblock("user1", "password1", session1, 14, "/doc", 2, writedata);
     return 0;
 }

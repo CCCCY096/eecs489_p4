@@ -43,9 +43,9 @@ int main(int argc, char *argv[])
     //invalid path
     fs_delete("user1", "password1", session2, 4, "/");
     //path not exists
-    fs_delete("user1", "password1", session2, 5, "/onedrive");
-    fs_delete("user1", "password1", session2, 6, "/onedrive/eecs");
-    fs_delete("user1", "password1", session2, 7, "/onedrive/eecs/eecs482");
+    fs_delete("user1", "password1", session2, 4, "/onedrive");
+    fs_delete("user1", "password1", session2, 5, "/onedrive/eecs");
+    fs_delete("user1", "password1", session2, 6, "/onedrive/eecs/eecs482");
     //no permission
 
     fs_delete("user1", "password1", session1, 4, "/dir");

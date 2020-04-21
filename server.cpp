@@ -47,7 +47,7 @@ int filename_check(std::string pathname){
 
 unsigned find_avail_blocks(){
     unsigned avail_block_num = 0;
-    for(avail_block_num = 1; avail_block_num < FS_BLOCKSIZE; avail_block_num++){
+    for(avail_block_num = 1; avail_block_num < FS_DISKSIZE; avail_block_num++){
         if( avail_disk_blocks.find(avail_block_num) != avail_disk_blocks.end())
             break;
     }
@@ -129,11 +129,11 @@ int find_target_block(std::string pathname, std::string& user, fs_inode& curr_in
         }
         fs_mutex_map[curr_block]->lock_shared();
         // std::cout << "LOCKED : " << curr_block <<std::endl;
-        disk_readblock(curr_block, &curr_inode);
         if(curr_block){
             fs_mutex_map[prev_block]->unlock_shared();
             // std::cout << "UNLOCKED : " << prev_block <<std::endl;
         }
+        disk_readblock(curr_block, &curr_inode);
         //invalid owner
         if( std::string(curr_inode.owner) != "" 
         && std::string(curr_inode.owner) != user ){
@@ -181,8 +181,8 @@ int fs_read_handler(std::string pathname, std::string& user, unsigned target_blo
     if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
         fs_mutex_map[curr_block] = new boost::shared_mutex;
     boost::shared_lock<boost::shared_mutex> read_lock(*fs_mutex_map[curr_block]);
-    disk_readblock(curr_block, &curr_inode);
     fs_mutex_map[prev_block]->unlock_shared();
+    disk_readblock(curr_block, &curr_inode);
     if (curr_inode.type != 'f'){
         cout_lock.lock();
         std::cout << "ERROR: READING FROM NON-FILE TYPE" << std::endl;
@@ -225,8 +225,8 @@ int fs_write_handler(const std::string& text, std::string pathname, std::string&
     if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
         fs_mutex_map[curr_block] = new boost::shared_mutex;
     boost::unique_lock<boost::shared_mutex> write_lock(*fs_mutex_map[curr_block]);
-    disk_readblock(curr_block, &curr_inode);
     fs_mutex_map[prev_block]->unlock_shared();
+    disk_readblock(curr_block, &curr_inode);
     if (curr_inode.type != 'f'){
         cout_lock.lock();
         std::cout << "ERROR: WRITING TO NON-FILE TYPE" << std::endl;
@@ -286,9 +286,9 @@ int fs_create_handler(std::string pathname, std::string& user, char type, unsign
     // std::cout << "ACQUIRE LOCK:" << curr_block << std::endl; 
     boost::unique_lock<boost::shared_mutex> write_lock(*fs_mutex_map[curr_block]);
     // std::cout << "ACQUIRE LOCK SUCCESS:" << curr_block << std::endl; 
-    disk_readblock(curr_block, &curr_inode);
     if(curr_block)
         fs_mutex_map[prev_block]->unlock_shared();
+    disk_readblock(curr_block, &curr_inode);
     if ( std::string(curr_inode.owner) != "" && user != std::string(curr_inode.owner) ){
         cout_lock.lock();
         std::cout << "ERROR: CREATE NO PERMISSION" << std::endl;
@@ -347,10 +347,10 @@ int fs_create_handler(std::string pathname, std::string& user, char type, unsign
         }
         unsigned avail_block_num = find_avail_blocks();
         new_entries[0].inode_block = avail_block_num;
-        assert(avail_block_num != 0);
+        // assert(avail_block_num != 0);
         avail_disk_blocks.erase(avail_block_num);
         unsigned parent_block_num = find_avail_blocks();
-        assert(parent_block_num != 0);
+        // assert(parent_block_num != 0);
         avail_disk_blocks.insert(avail_block_num);
         strcpy(new_entries[0].name, new_name.c_str());
         curr_inode.blocks[curr_inode.size++] = parent_block_num;
@@ -387,11 +387,11 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
     // std::cout << "ACQUIRE LOCK " << curr_block << std::endl;
     boost::unique_lock<boost::shared_mutex> write_lock1(*fs_mutex_map[curr_block]);
     // std::cout << "ACQUIRE LOCK SUCCESS" << curr_block << std::endl;
-    disk_readblock(curr_block, &curr_inode);
     if(curr_block){
         // std::cout << "UNLOCK " << prev_block << std::endl;
         fs_mutex_map[prev_block]->unlock_shared();
     }
+    disk_readblock(curr_block, &curr_inode);
     bool path_found = false;
     unsigned parent_file_block_index = 0;
     unsigned delete_index = 0;
@@ -471,16 +471,16 @@ void handle_request(int connect_sock){
     std::string data;
     char buf[1];
     do{
-        int n = recv(connect_sock, buf, sizeof(buf), 0);
-        assert(n == 1);
+        recv(connect_sock, buf, sizeof(buf), 0);
+        // assert(n == 1);
         data += buf[0];
     } while (buf[0] != '\0');
     std::stringstream ss(data);
     std::string user;
     unsigned request_size;
     ss >> user >> request_size;
-    unsigned MAX_REQ_SIZE = 13 + sizeof(unsigned) + sizeof(unsigned) 
-    + FS_MAXPATHNAME + sizeof(unsigned) + 1 + FS_BLOCKSIZE + 4;
+    unsigned MAX_REQ_SIZE = 13 + sizeof(unsigned int) + sizeof(unsigned int) 
+    + FS_MAXPATHNAME + 3 + 1 + FS_BLOCKSIZE + 4;
     if ( user.size() > FS_MAXUSERNAME || request_size >  (2 * MAX_REQ_SIZE + 64) ){
         close(connect_sock);
         return;
@@ -545,16 +545,16 @@ void handle_request(int connect_sock){
             close(connect_sock);
             return;
         }
-        if (filename_check(pathname) < 0){
-            cout_lock.lock();
-            std::cout << "ERROR: INVALID PATHNAME" <<std::endl;
-            cout_lock.unlock();
-            close(connect_sock);
-            return;
-        }
         {
             boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
             session_seq[session] = seq;
+        }
+        if (filename_check(pathname) < 0 || block >= FS_MAXFILEBLOCKS){
+            cout_lock.lock();
+            std::cout << "ERROR: INVALID PATHNAME OR BLOCK NUM" <<std::endl;
+            cout_lock.unlock();
+            close(connect_sock);
+            return;
         }
         if( fs_read_handler(pathname, user, block, session, seq, connect_sock) == -1)
             close(connect_sock);
@@ -574,16 +574,16 @@ void handle_request(int connect_sock){
             close(connect_sock);
             return;
         }
-        if (filename_check(pathname) < 0){
-            cout_lock.lock();
-            std::cout << "ERROR: INVALID PATHNAME" <<std::endl;
-            cout_lock.unlock();
-            close(connect_sock);
-            return;
-        }
         {
             boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
             session_seq[session] = seq;
+        }
+        if (filename_check(pathname) < 0 || block >= FS_MAXFILEBLOCKS){
+            cout_lock.lock();
+            std::cout << "ERROR: INVALID PATHNAME OR BLOCK NUM" <<std::endl;
+            cout_lock.unlock();
+            close(connect_sock);
+            return;
         }
         // std::cout << text << std::endl;
         if(fs_write_handler(text, pathname, user, block, session, seq, connect_sock) == -1)
@@ -601,16 +601,16 @@ void handle_request(int connect_sock){
             close(connect_sock);
             return;
         }
+        {
+            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
+            session_seq[session] = seq;
+        }
         if (filename_check(pathname) < 0){
             cout_lock.lock();
             std::cout << "ERROR: INVALID PATHNAME" <<std::endl;
             cout_lock.unlock();
             close(connect_sock);
             return;
-        }
-        {
-            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
-            session_seq[session] = seq;
         }
         if( file_type != 'd' && file_type != 'f' ){
             close(connect_sock);
@@ -630,16 +630,16 @@ void handle_request(int connect_sock){
             close(connect_sock);
             return;
         }
+        {
+            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
+            session_seq[session] = seq;
+        }
         if (filename_check(pathname) < 0){
             cout_lock.lock();
             std::cout << "ERROR: INVALID PATHNAME" <<std::endl;
             cout_lock.unlock();
             close(connect_sock);
             return;
-        }
-        {
-            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
-            session_seq[session] = seq;
         }
         if (fs_delete_handler(pathname, user, session, seq, connect_sock ) == -1)
             close(connect_sock);
