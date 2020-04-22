@@ -21,6 +21,7 @@ boost::mutex listen_sock_lock;
 boost::mutex users_lock;
 boost::mutex session_seq_lock;
 boost::mutex avail_block_lock;
+boost::mutex mutex_map_lock;
 std::unordered_map<unsigned, boost::shared_mutex * > fs_mutex_map;
 std::unordered_map<std::string, std::unordered_set<unsigned> > user_session;
 std::unordered_map<std::string, std::string> users;
@@ -123,8 +124,11 @@ int find_target_block(std::string pathname, std::string& user, fs_inode& curr_in
         std::string next_level_name = pathname.substr(0, pathname.find('/'));
         pathname = pathname.substr(pathname.find('/') + 1);
         bool path_found = false;
-        if(fs_mutex_map.find(curr_block) == fs_mutex_map.end()){
-            fs_mutex_map[curr_block] = new boost::shared_mutex;
+        {
+            boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
+            if(fs_mutex_map.find(curr_block) == fs_mutex_map.end()){
+                fs_mutex_map[curr_block] = new boost::shared_mutex;
+            }
         }
         fs_mutex_map[curr_block]->lock_shared();
         // std::cout << "LOCKED : " << curr_block <<std::endl;
@@ -177,8 +181,11 @@ int fs_read_handler(std::string pathname, std::string& user, unsigned target_blo
     char read_buf[FS_BLOCKSIZE];
     memset(read_buf, 0, FS_BLOCKSIZE);
     if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return -1;
-    if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
-        fs_mutex_map[curr_block] = new boost::shared_mutex;
+    {
+        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
+        if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
+            fs_mutex_map[curr_block] = new boost::shared_mutex;
+    }
     boost::shared_lock<boost::shared_mutex> read_lock(*fs_mutex_map[curr_block]);
     fs_mutex_map[prev_block]->unlock_shared();
     disk_readblock(curr_block, &curr_inode);
@@ -221,8 +228,11 @@ int fs_write_handler(const std::string& text, std::string pathname, std::string&
     memset(write_buf, 0, FS_BLOCKSIZE);
     memcpy(write_buf, text.c_str(), text.size());
     if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return -1;
-    if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
-        fs_mutex_map[curr_block] = new boost::shared_mutex;
+    {
+        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
+        if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
+            fs_mutex_map[curr_block] = new boost::shared_mutex;
+    }
     boost::unique_lock<boost::shared_mutex> write_lock(*fs_mutex_map[curr_block]);
     fs_mutex_map[prev_block]->unlock_shared();
     disk_readblock(curr_block, &curr_inode);
@@ -286,8 +296,11 @@ int fs_create_handler(std::string pathname, std::string& user, char type, unsign
     //init completed
     fs_inode curr_inode;
     if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return -1;
-    if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
-        fs_mutex_map[curr_block] = new boost::shared_mutex;
+    {
+        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
+        if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
+            fs_mutex_map[curr_block] = new boost::shared_mutex;
+    }
     // std::cout << "ACQUIRE LOCK:" << curr_block << std::endl; 
     boost::unique_lock<boost::shared_mutex> write_lock(*fs_mutex_map[curr_block]);
     // std::cout << "ACQUIRE LOCK SUCCESS:" << curr_block << std::endl; 
@@ -334,6 +347,7 @@ int fs_create_handler(std::string pathname, std::string& user, char type, unsign
         }
         tmp_buf[entries_index].inode_block = avail_block_num;
         disk_writeblock(avail_block_num, &new_dirorfile);
+        memset(tmp_buf[entries_index].name, 0, sizeof(tmp_buf[entries_index].name));
         strcpy(tmp_buf[entries_index].name, new_name.c_str());
         disk_writeblock(curr_inode.blocks[curr_inode_index], tmp_buf);
         avail_disk_blocks.erase(avail_block_num);
@@ -387,8 +401,11 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
     fs_inode curr_inode;
     fs_inode to_delete_inode;
     if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return -1;
-    if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
-        fs_mutex_map[curr_block] = new boost::shared_mutex;
+    {
+        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
+        if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
+            fs_mutex_map[curr_block] = new boost::shared_mutex;
+    }
     // std::cout << "ACQUIRE LOCK " << curr_block << std::endl;
     boost::unique_lock<boost::shared_mutex> write_lock1(*fs_mutex_map[curr_block]);
     // std::cout << "ACQUIRE LOCK SUCCESS" << curr_block << std::endl;
@@ -417,8 +434,11 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
             break;
     }
     if(!path_found) return -1;
-    if( fs_mutex_map.find(delete_block) == fs_mutex_map.end())
-        fs_mutex_map[delete_block] = new boost::shared_mutex;
+    {
+        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
+        if( fs_mutex_map.find(delete_block) == fs_mutex_map.end())
+            fs_mutex_map[delete_block] = new boost::shared_mutex;
+    }
     boost::unique_lock<boost::shared_mutex> write_lock2(*fs_mutex_map[delete_block]);
     disk_readblock(delete_block, &to_delete_inode);
     if(to_delete_inode.type == 'd' && to_delete_inode.size)
@@ -501,9 +521,14 @@ void handle_request(int connect_sock){
     char request_buf_decrpt[request_size];
     recv(connect_sock, request_buf, sizeof(request_buf), MSG_WAITALL );
     // Error handling: if no user. Need lock on map?
-    users_lock.lock();
+    {
+        boost::unique_lock<boost::mutex> lock_user(users_lock);
+        if(users.find(user) == users.end()){
+            close(connect_sock);
+            return;
+        }  
+    }
     int decrypted_len = fs_decrypt(users[user].c_str(), (void*) request_buf, request_size, request_buf_decrpt);
-    users_lock.unlock();
     if ( decrypted_len == -1 ){
         close(connect_sock);
         return;
