@@ -41,7 +41,7 @@ int main(int argc, char *argv[])
 
     //READBLOCK error test
     //path invalid
-    fs_readblock("user1", "password1", session1, 4, " doc", 0, readdata);
+    // fs_readblock("user1", "password1", session1, 4, " doc", 0, readdata);
     fs_readblock("user1", "password1", session1, 4, "doc", 0, readdata);
     fs_readblock("user1", "password1", session1, 4, "doc/", 0, readdata);
     fs_readblock("user1", "password1", session1, 4, "/", 0, readdata);
