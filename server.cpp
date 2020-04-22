@@ -11,18 +11,18 @@
 #include <sstream>
 #include <vector>
 #include <assert.h>
-// #include <arpa/inet.h>
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
 #include <netinet/ip.h> 
+#include <vector>
 extern boost::mutex cout_lock;
 boost::mutex listen_sock_lock;
 boost::mutex users_lock;
 boost::mutex session_seq_lock;
 boost::mutex avail_block_lock;
 boost::mutex mutex_map_lock;
-std::unordered_map<unsigned, boost::shared_mutex * > fs_mutex_map;
+std::vector<boost::shared_mutex *> fs_mutex_vec;
 std::unordered_map<std::string, std::unordered_set<unsigned> > user_session;
 std::unordered_map<std::string, std::string> users;
 std::unordered_map<unsigned, unsigned> session_seq;
@@ -31,14 +31,17 @@ unsigned session_num = 0;
 int server_port = 0;
 
 int filename_check(std::string pathname){
+    bool root = true;
     if( pathname.size() > FS_MAXPATHNAME )
         return -1;
     if(pathname == "" || pathname[0] != '/' || pathname[pathname.size()-1] == '/')
         return -1;
     while(pathname.find('/') != std::string::npos){
         std::string next_level = pathname.substr(0, pathname.find('/'));
-        if (next_level.size() > FS_MAXFILENAME)
+        if (next_level.size() > FS_MAXFILENAME || (!root && next_level == ""))
             return -1;
+        if(root)
+            root = false;
         pathname = pathname.substr(pathname.find('/')+1);
     }
     if (pathname.size() > FS_MAXFILENAME)
@@ -54,21 +57,24 @@ unsigned find_avail_blocks(){
     return 0;
 }
 
-void get_fs_init_blocks( u_int32_t curr_inode_block ){
+void get_fs_init_blocks( unsigned curr_inode_block ){
     fs_inode curr_inode;
     disk_readblock(curr_inode_block, &curr_inode);
-    for( unsigned i = 0; i < curr_inode.size; i++ ){
-        avail_disk_blocks.erase( curr_inode.blocks[i] );
-        if( curr_inode.type == 'f' )
-            continue;
-        fs_direntry entries[FS_BLOCKSIZE/sizeof(fs_direntry)];
-        disk_readblock( curr_inode.blocks[i], entries );
-        for( unsigned j = 0; j < FS_BLOCKSIZE/sizeof(fs_direntry); j++){
-            if( entries[j].inode_block != 0){
-                avail_disk_blocks.erase( entries[j].inode_block );
-                get_fs_init_blocks( entries[j].inode_block );
-            }
-        }   
+    if( curr_inode.type == 'f' ){
+        for( unsigned i = 0; i < curr_inode.size; i++ )
+            avail_disk_blocks.erase( curr_inode.blocks[i] );
+    }else if(curr_inode.type == 'd'){
+        for( unsigned i = 0; i < curr_inode.size; i++ ){
+            avail_disk_blocks.erase( curr_inode.blocks[i] );
+            fs_direntry entries[FS_BLOCKSIZE/sizeof(fs_direntry)];
+            disk_readblock( curr_inode.blocks[i], entries );
+            for( unsigned j = 0; j < FS_BLOCKSIZE/sizeof(fs_direntry); j++){
+                if( entries[j].inode_block != 0){
+                    avail_disk_blocks.erase( entries[j].inode_block );
+                    get_fs_init_blocks( entries[j].inode_block );
+                }
+            }   
+        }
     }
 }
 // Return -1 on failure, socket_fd on success
@@ -124,16 +130,10 @@ int find_target_block(std::string pathname, std::string& user, fs_inode& curr_in
         std::string next_level_name = pathname.substr(0, pathname.find('/'));
         pathname = pathname.substr(pathname.find('/') + 1);
         bool path_found = false;
-        {
-            boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
-            if(fs_mutex_map.find(curr_block) == fs_mutex_map.end()){
-                fs_mutex_map[curr_block] = new boost::shared_mutex;
-            }
-        }
-        fs_mutex_map[curr_block]->lock_shared();
+        fs_mutex_vec[curr_block]->lock_shared();
         // std::cout << "LOCKED : " << curr_block <<std::endl;
         if(curr_block){
-            fs_mutex_map[prev_block]->unlock_shared();
+            fs_mutex_vec[prev_block]->unlock_shared();
             // std::cout << "UNLOCKED : " << prev_block <<std::endl;
         }
         disk_readblock(curr_block, &curr_inode);
@@ -141,7 +141,7 @@ int find_target_block(std::string pathname, std::string& user, fs_inode& curr_in
         if( std::string(curr_inode.owner) != "" 
         && std::string(curr_inode.owner) != user ){
             // std::cout << user << std::string(curr_inode.owner) <<std::endl;
-            fs_mutex_map[curr_block]->unlock_shared();
+            fs_mutex_vec[curr_block]->unlock_shared();
             return -1;
         }
         for( unsigned i = 0; i < curr_inode.size; i++ ){
@@ -161,7 +161,7 @@ int find_target_block(std::string pathname, std::string& user, fs_inode& curr_in
                 break;
         }
         if(!path_found){
-            fs_mutex_map[curr_block]->unlock_shared();
+            fs_mutex_vec[curr_block]->unlock_shared();
             // std::cout << "UNLOCKED : " << curr_block <<std::endl;
             // std::cout << "here " << curr_block <<std::endl;
             return -1;
@@ -181,13 +181,8 @@ int fs_read_handler(std::string pathname, std::string& user, unsigned target_blo
     char read_buf[FS_BLOCKSIZE];
     memset(read_buf, 0, FS_BLOCKSIZE);
     if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return -1;
-    {
-        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
-        if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
-            fs_mutex_map[curr_block] = new boost::shared_mutex;
-    }
-    boost::shared_lock<boost::shared_mutex> read_lock(*fs_mutex_map[curr_block]);
-    fs_mutex_map[prev_block]->unlock_shared();
+    boost::shared_lock<boost::shared_mutex> read_lock(*fs_mutex_vec[curr_block]);
+    fs_mutex_vec[prev_block]->unlock_shared();
     disk_readblock(curr_block, &curr_inode);
     if (curr_inode.type != 'f'){
         cout_lock.lock();
@@ -228,13 +223,8 @@ int fs_write_handler(const std::string& text, std::string pathname, std::string&
     memset(write_buf, 0, FS_BLOCKSIZE);
     memcpy(write_buf, text.c_str(), text.size());
     if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return -1;
-    {
-        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
-        if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
-            fs_mutex_map[curr_block] = new boost::shared_mutex;
-    }
-    boost::unique_lock<boost::shared_mutex> write_lock(*fs_mutex_map[curr_block]);
-    fs_mutex_map[prev_block]->unlock_shared();
+    boost::unique_lock<boost::shared_mutex> write_lock(*fs_mutex_vec[curr_block]);
+    fs_mutex_vec[prev_block]->unlock_shared();
     disk_readblock(curr_block, &curr_inode);
     if (curr_inode.type != 'f'){
         cout_lock.lock();
@@ -296,16 +286,11 @@ int fs_create_handler(std::string pathname, std::string& user, char type, unsign
     //init completed
     fs_inode curr_inode;
     if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return -1;
-    {
-        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
-        if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
-            fs_mutex_map[curr_block] = new boost::shared_mutex;
-    }
     // std::cout << "ACQUIRE LOCK:" << curr_block << std::endl; 
-    boost::unique_lock<boost::shared_mutex> write_lock(*fs_mutex_map[curr_block]);
+    boost::unique_lock<boost::shared_mutex> write_lock(*fs_mutex_vec[curr_block]);
     // std::cout << "ACQUIRE LOCK SUCCESS:" << curr_block << std::endl; 
     if(curr_block)
-        fs_mutex_map[prev_block]->unlock_shared();
+        fs_mutex_vec[prev_block]->unlock_shared();
     disk_readblock(curr_block, &curr_inode);
     if ( std::string(curr_inode.owner) != "" && user != std::string(curr_inode.owner) ){
         cout_lock.lock();
@@ -401,17 +386,12 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
     fs_inode curr_inode;
     fs_inode to_delete_inode;
     if(find_target_block(pathname, user, curr_inode, curr_block, prev_block) < 0) return -1;
-    {
-        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
-        if( fs_mutex_map.find(curr_block) == fs_mutex_map.end())
-            fs_mutex_map[curr_block] = new boost::shared_mutex;
-    }
     // std::cout << "ACQUIRE LOCK " << curr_block << std::endl;
-    boost::unique_lock<boost::shared_mutex> write_lock1(*fs_mutex_map[curr_block]);
+    boost::unique_lock<boost::shared_mutex> write_lock1(*fs_mutex_vec[curr_block]);
     // std::cout << "ACQUIRE LOCK SUCCESS" << curr_block << std::endl;
     if(curr_block){
         // std::cout << "UNLOCK " << prev_block << std::endl;
-        fs_mutex_map[prev_block]->unlock_shared();
+        fs_mutex_vec[prev_block]->unlock_shared();
     }
     disk_readblock(curr_block, &curr_inode);
     bool path_found = false;
@@ -434,12 +414,7 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
             break;
     }
     if(!path_found) return -1;
-    {
-        boost::unique_lock<boost::mutex> map_lock(mutex_map_lock);
-        if( fs_mutex_map.find(delete_block) == fs_mutex_map.end())
-            fs_mutex_map[delete_block] = new boost::shared_mutex;
-    }
-    boost::unique_lock<boost::shared_mutex> write_lock2(*fs_mutex_map[delete_block]);
+    boost::unique_lock<boost::shared_mutex> write_lock2(*fs_mutex_vec[delete_block]);
     disk_readblock(delete_block, &to_delete_inode);
     if(to_delete_inode.type == 'd' && to_delete_inode.size)
         return -1;
@@ -688,6 +663,10 @@ void handle_request(int connect_sock){
 
 
 int main( int argc, char* argv[] ){
+    fs_mutex_vec.resize(FS_DISKSIZE);
+    for(unsigned i = 0; i < FS_DISKSIZE; i++){
+        fs_mutex_vec[i] = new boost::shared_mutex;
+    }
     std::string username, password;
     while( std::cin >> username >> password ){
         users[username] = password;

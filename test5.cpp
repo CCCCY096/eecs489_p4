@@ -43,8 +43,8 @@ int main(int argc, char *argv[])
     //path invalid
     fs_readblock("user1", "password1", session1, 4, " doc", 0, readdata);
     fs_readblock("user1", "password1", session1, 5, "doc", 0, readdata);
-    fs_readblock("user1", "password1", session1, 6, "doc/", 0, readdata);
-    fs_readblock("user1", "password1", session1, 7, "/", 0, readdata);
+    fs_readblock("user1", "password1", session1, 6, "/Thispathnameisreallyreallyreallyreallyreallyreallyreallylyly", 0, readdata);
+    fs_readblock("user1", "password1", session1, 7, "/Thispathnameisreallyreallyreallyreallyreallyreallyreallylyl", 0, readdata);
     //path not exist
     fs_readblock("user1", "password1", session1, 8, "/doc1", 0, readdata);
     fs_readblock("user1", "password1", session1, 9, "/dir/file", 0, readdata);
