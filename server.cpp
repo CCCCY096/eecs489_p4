@@ -21,7 +21,7 @@ boost::mutex listen_sock_lock;
 boost::mutex users_lock;
 boost::mutex session_seq_lock;
 boost::mutex avail_block_lock;
-boost::mutex mutex_map_lock;
+// boost::mutex mutex_map_lock;
 std::vector<boost::shared_mutex *> fs_mutex_vec;
 std::unordered_map<std::string, std::unordered_set<unsigned> > user_session;
 std::unordered_map<std::string, std::string> users;
@@ -476,14 +476,25 @@ void handle_request(int connect_sock){
     std::string data;
     char buf[1];
     do{
-        recv(connect_sock, buf, sizeof(buf), 0);
+        if (recv(connect_sock, buf, sizeof(buf), 0) < 0){
+            close(connect_sock);
+            return;
+        }
         // assert(n == 1);
         data += buf[0];
+        if ( data.size() > FS_MAXUSERNAME + 1 + sizeof(int) + 1 ){
+            close(connect_sock);
+            return;
+        }
     } while (buf[0] != '\0');
     std::stringstream ss(data);
     std::string user;
     unsigned request_size;
     ss >> user >> request_size;
+    if( user + ' ' + std::to_string(request_size) + '\0' != data ){
+        close(connect_sock);
+        return;
+    }
     unsigned MAX_REQ_SIZE = 13 + sizeof(unsigned int) + sizeof(unsigned int) 
     + FS_MAXPATHNAME + 3 + 1 + FS_BLOCKSIZE + 4;
     if ( user.size() > FS_MAXUSERNAME || request_size >  (2 * MAX_REQ_SIZE + 64) ){
@@ -494,7 +505,10 @@ void handle_request(int connect_sock){
     //Error handling: check header correctness
     char request_buf[request_size];
     char request_buf_decrpt[request_size];
-    recv(connect_sock, request_buf, sizeof(request_buf), MSG_WAITALL );
+    if (recv(connect_sock, request_buf, sizeof(request_buf), MSG_WAITALL ) < 0){
+        close(connect_sock);
+        return;
+    }
     // Error handling: if no user. Need lock on map?
     {
         boost::unique_lock<boost::mutex> lock_user(users_lock);
