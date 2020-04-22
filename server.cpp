@@ -21,7 +21,7 @@ boost::mutex listen_sock_lock;
 boost::mutex users_lock;
 boost::mutex session_seq_lock;
 boost::mutex avail_block_lock;
-// boost::mutex mutex_map_lock;
+boost::mutex user_session_lock;
 std::vector<boost::shared_mutex *> fs_mutex_vec;
 std::unordered_map<std::string, std::unordered_set<unsigned> > user_session;
 std::unordered_map<std::string, std::string> users;
@@ -458,10 +458,13 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
 
 int session_owner_check (std::string& type, std::string& user, unsigned session, unsigned seq){
     if( type != "FS_SESSION"){
-        if(user_session.find(user) == user_session.end())
-            return -1;
-        if(user_session[user].find(session) == user_session[user].end())
-            return -1;
+        {
+            boost::unique_lock<boost::mutex> lock_user_session(user_session_lock);
+            if(user_session.find(user) == user_session.end())
+                return -1;
+            if(user_session[user].find(session) == user_session[user].end())
+                return -1;
+        }
         {
             boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
             if( session_seq.find(session) != session_seq.end() && session_seq[session] >= seq )
@@ -545,7 +548,10 @@ void handle_request(int connect_sock){
             return;
         }
         //create a session lock needed?
-        user_session[user].insert(session_num);
+        {
+            boost::unique_lock<boost::mutex> lock_user_session(user_session_lock);
+            user_session[user].insert(session_num);
+        }
         std::string response;
         {
             boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
