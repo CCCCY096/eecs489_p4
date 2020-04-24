@@ -17,11 +17,12 @@
 #include <netinet/ip.h> 
 #include <vector>
 extern boost::mutex cout_lock;
-boost::mutex listen_sock_lock;
-boost::mutex users_lock;
-boost::mutex session_seq_lock;
-boost::mutex avail_block_lock;
-boost::mutex user_session_lock;
+// boost::mutex listen_sock_lock;
+// boost::mutex users_lock;
+// boost::mutex session_seq_lock;
+// boost::mutex avail_block_lock;
+// boost::mutex user_session_lock;
+boost::mutex mem_lock;
 std::vector<boost::shared_mutex *> fs_mutex_vec;
 std::unordered_map<std::string, std::unordered_set<unsigned> > user_session;
 std::unordered_map<std::string, std::string> users;
@@ -111,8 +112,14 @@ void send_response( std::string& response, const std::string& user, unsigned con
     std::string response_header = std::to_string(size_encrypt) + '\0';
     strcpy(header_buf, response_header.c_str());
     header_buf[size_encrypt] = '\0';
-    send(connect_sock, response_header.c_str(), response_header.size(), MSG_NOSIGNAL);
-    send(connect_sock, encrypt_buf, size_encrypt, MSG_NOSIGNAL);
+    if (send(connect_sock, response_header.c_str(), response_header.size(), MSG_NOSIGNAL) < 0){
+        close(connect_sock);
+        return;
+    }
+    if (send(connect_sock, encrypt_buf, size_encrypt, MSG_NOSIGNAL) < 0){
+        close(connect_sock);
+        return;
+    }
     close(connect_sock);
 }
 
@@ -177,21 +184,12 @@ int fs_read_handler(std::string pathname, std::string& user, unsigned target_blo
         fs_mutex_vec[prev_block]->unlock_shared();
         disk_readblock(curr_block, &curr_inode);
         if (curr_inode.type != 'f'){
-            cout_lock.lock();
-            std::cout << "ERROR: READING FROM NON-FILE TYPE" << std::endl;
-            cout_lock.unlock();
             return -1;
         }
         if ( target_block >= curr_inode.size ){
-            cout_lock.lock();
-            std::cout << "ERROR: READING OUTOFRANGE" << std::endl;
-            cout_lock.unlock();
             return -1;
         }
         if ( user != std::string(curr_inode.owner) ){
-            cout_lock.lock();
-            std::cout << "ERROR: READING NO PERMISSION" << std::endl;
-            cout_lock.unlock();
             return -1;
         }
         disk_readblock(curr_inode.blocks[target_block], (void*) read_buf );
@@ -218,38 +216,28 @@ int fs_write_handler(const std::string& text, std::string pathname, std::string&
         fs_mutex_vec[prev_block]->unlock_shared();
         disk_readblock(curr_block, &curr_inode);
         if (curr_inode.type != 'f'){
-            cout_lock.lock();
-            std::cout << "ERROR: WRITING TO NON-FILE TYPE" << std::endl;
-            cout_lock.unlock();
             return -1;
         }
         if ( user != std::string(curr_inode.owner) ){
-            cout_lock.lock();
-            std::cout << "ERROR: WRITING NO PERMISSION" << std::endl;
-            cout_lock.unlock();
             return -1;
         }
         if (target_block < curr_inode.size)
             disk_writeblock(curr_inode.blocks[target_block], (void*) write_buf );
         else{
             if(curr_inode.size >= FS_MAXFILEBLOCKS || curr_inode.size != target_block ){
-                cout_lock.lock();
-                std::cout << "ERROR: INVALID OFFSET OR CURR FILE FULL" << std::endl;
-                cout_lock.unlock();
                 return -1;
             }
-            boost::unique_lock<boost::mutex> block_lock(avail_block_lock);
-            unsigned avail_block_num = find_avail_blocks();
-            if( !avail_block_num ){
-                cout_lock.lock();
-                std::cout << "ERROR: NO SPACE" <<std::endl;
-                cout_lock.unlock();
-                return -1;
+            {
+                boost::unique_lock<boost::mutex> block_lock(mem_lock);
+                unsigned avail_block_num = find_avail_blocks();
+                if( !avail_block_num ){
+                    return -1;
+                }
+                avail_disk_blocks.erase(avail_block_num);
+                curr_inode.blocks[target_block] = avail_block_num;
             }
-            curr_inode.blocks[target_block] = avail_block_num;
             disk_writeblock(curr_inode.blocks[curr_inode.size++], (void*) write_buf );
             disk_writeblock(curr_block, (void*) &curr_inode );
-            avail_disk_blocks.erase(avail_block_num);
         }
     }
     std::string response = std::to_string(session) + ' ' + std::to_string(seq) + '\0';
@@ -282,10 +270,7 @@ int fs_create_handler(std::string pathname, std::string& user, char type, unsign
         if(curr_block)
             fs_mutex_vec[prev_block]->unlock_shared();
         disk_readblock(curr_block, &curr_inode);
-        if ( std::string(curr_inode.owner) != "" && user != std::string(curr_inode.owner) ){
-            cout_lock.lock();
-            std::cout << "ERROR: CREATE NO PERMISSION" << std::endl;
-            cout_lock.unlock();
+        if ( curr_block && user != std::string(curr_inode.owner) ){
             return -1;
         }
         bool file_create = false;
@@ -298,9 +283,6 @@ int fs_create_handler(std::string pathname, std::string& user, char type, unsign
             disk_readblock(curr_inode.blocks[i], entries);
             for ( unsigned j = 0; j < FS_BLOCKSIZE/sizeof(fs_direntry); j++){
                 if( entries[j].inode_block && !strcmp(entries[j].name, new_name.c_str())){
-                    cout_lock.lock();
-                    std::cout << "ERROR: FILE ALREADY EXISTS" <<std::endl;
-                    cout_lock.unlock();
                     return -1;
                 }
                 if( !entries[j].inode_block  && !file_create){
@@ -312,47 +294,44 @@ int fs_create_handler(std::string pathname, std::string& user, char type, unsign
             }
         }
         if( file_create ){
-            boost::unique_lock<boost::mutex> block_lock(avail_block_lock);
-            unsigned avail_block_num = find_avail_blocks();
-            if( !avail_block_num ){
-                cout_lock.lock();
-                std::cout << "ERROR: NO SPACE" <<std::endl;
-                cout_lock.unlock();
-                return -1;
+            unsigned avail_block_num;
+            {
+                boost::unique_lock<boost::mutex> block_lock(mem_lock);
+                avail_block_num = find_avail_blocks();
+                if( !avail_block_num ){
+                    return -1;
+                }
+                tmp_buf[entries_index].inode_block = avail_block_num;
+                avail_disk_blocks.erase(avail_block_num);
             }
-            tmp_buf[entries_index].inode_block = avail_block_num;
             disk_writeblock(avail_block_num, &new_dirorfile);
             memset(tmp_buf[entries_index].name, 0, sizeof(tmp_buf[entries_index].name));
             strcpy(tmp_buf[entries_index].name, new_name.c_str());
             disk_writeblock(curr_inode.blocks[curr_inode_index], tmp_buf);
-            avail_disk_blocks.erase(avail_block_num);
         }
         if ( !file_create && curr_inode.size >= FS_MAXFILEBLOCKS)
             return -1;
         else if( !file_create){
             fs_direntry new_entries[FS_BLOCKSIZE/sizeof(fs_direntry)];
             memset(new_entries, 0, FS_BLOCKSIZE);
-            boost::unique_lock<boost::mutex> block_lock(avail_block_lock);
-            if( avail_disk_blocks.size() < 2 ){
-                cout_lock.lock();
-                std::cout << "ERROR:CREATE (CASE 2) NO SPACE" <<std::endl;
-                cout_lock.unlock();
-                return -1;
+            {
+                boost::unique_lock<boost::mutex> block_lock(mem_lock);
+                if( avail_disk_blocks.size() < 2 ){
+                    return -1;
+                }
+                unsigned avail_block_num = find_avail_blocks();
+                new_entries[0].inode_block = avail_block_num;
+                // assert(avail_block_num != 0);
+                avail_disk_blocks.erase(avail_block_num);
+                unsigned parent_block_num = find_avail_blocks();
+                // assert(parent_block_num != 0);
+                strcpy(new_entries[0].name, new_name.c_str());
+                curr_inode.blocks[curr_inode.size] = parent_block_num;
+                avail_disk_blocks.erase(parent_block_num);
             }
-            unsigned avail_block_num = find_avail_blocks();
-            new_entries[0].inode_block = avail_block_num;
-            // assert(avail_block_num != 0);
-            avail_disk_blocks.erase(avail_block_num);
-            unsigned parent_block_num = find_avail_blocks();
-            // assert(parent_block_num != 0);
-            avail_disk_blocks.insert(avail_block_num);
-            strcpy(new_entries[0].name, new_name.c_str());
-            curr_inode.blocks[curr_inode.size++] = parent_block_num;
             disk_writeblock(new_entries[0].inode_block, &new_dirorfile);
-            disk_writeblock(parent_block_num, new_entries);
+            disk_writeblock(curr_inode.blocks[curr_inode.size++], new_entries);
             disk_writeblock(curr_block, &curr_inode);
-            avail_disk_blocks.erase(avail_block_num);
-            avail_disk_blocks.erase(parent_block_num);
         }
     }
     std::string response = std::to_string(session) + ' ' + std::to_string(seq) + '\0';
@@ -383,6 +362,9 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
             fs_mutex_vec[prev_block]->unlock_shared();
         }
         disk_readblock(curr_block, &curr_inode);
+        if ( curr_block && user != std::string(curr_inode.owner) ){
+            return -1;
+        }
         bool path_found = false;
         unsigned parent_file_block_index = 0;
         unsigned delete_index = 0;
@@ -407,6 +389,9 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
         disk_readblock(delete_block, &to_delete_inode);
         if(to_delete_inode.type == 'd' && to_delete_inode.size)
             return -1;
+        if ( user != std::string(to_delete_inode.owner) ){
+            return -1;
+        }
         entries[delete_index].inode_block = 0;
         bool entries_empty = true;
         for ( unsigned j = 0; j < FS_BLOCKSIZE/sizeof(fs_direntry); j++){
@@ -423,14 +408,17 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
             }
             curr_inode.blocks[ curr_inode.size - 1 ] = 0;
             curr_inode.size--;
+            {
+                boost::unique_lock<boost::mutex> block_lock(mem_lock);
+                avail_disk_blocks.insert(parent_blocks);
+            }
             disk_writeblock(curr_block, &curr_inode);
         }else {
             disk_writeblock(parent_blocks, entries);
         }
+        write_lock1.unlock();
         {
-            boost::unique_lock<boost::mutex> block_lock(avail_block_lock);
-            if( entries_empty )
-                avail_disk_blocks.insert(parent_blocks);
+            boost::unique_lock<boost::mutex> block_lock(mem_lock);
             if( to_delete_inode.type == 'f' ){
                 for( unsigned i = 0; i < to_delete_inode.size; i++)
                     avail_disk_blocks.insert(to_delete_inode.blocks[i]);
@@ -445,18 +433,16 @@ int fs_delete_handler(std::string pathname, std::string& user, unsigned session,
 
 int session_owner_check (std::string& type, std::string& user, unsigned session, unsigned seq){
     if( type != "FS_SESSION"){
-        {
-            boost::unique_lock<boost::mutex> lock_user_session(user_session_lock);
-            if(user_session.find(user) == user_session.end())
-                return -1;
-            if(user_session[user].find(session) == user_session[user].end())
-                return -1;
-        }
-        {
-            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
-            if( session_seq.find(session) != session_seq.end() && session_seq[session] >= seq )
-                return -1;
-        }
+        boost::unique_lock<boost::mutex> lock_user_session(mem_lock);
+        if(user_session.find(user) == user_session.end())
+            return -1;
+        if(user_session[user].find(session) == user_session[user].end())
+            return -1;
+        if( session_seq.find(session) == session_seq.end() )
+            return -1;
+        if( session_seq.find(session) != session_seq.end() && session_seq[session] >= seq )
+            return -1;
+        session_seq[session] = seq;
     }
     return 0;
 }
@@ -486,7 +472,7 @@ void handle_request(int connect_sock){
         return;
     }
     unsigned MAX_REQ_SIZE = 13 + sizeof(unsigned int) + sizeof(unsigned int) 
-    + FS_MAXPATHNAME + 3 + 1 + FS_BLOCKSIZE + 4;
+    + FS_MAXPATHNAME + 3 + 1 + FS_BLOCKSIZE + 5;
     if ( user.size() > FS_MAXUSERNAME || request_size >  (2 * MAX_REQ_SIZE + 64) ){
         close(connect_sock);
         return;
@@ -495,13 +481,15 @@ void handle_request(int connect_sock){
     //Error handling: check header correctness
     char request_buf[request_size];
     char request_buf_decrpt[request_size];
-    if (recv(connect_sock, request_buf, sizeof(request_buf), MSG_WAITALL ) < 0){
-        close(connect_sock);
-        return;
+    for ( unsigned i = 0; i < request_size; i++){
+        if (recv(connect_sock, &(request_buf[i]), 1, MSG_WAITALL ) < 0){
+            close(connect_sock);
+            return;
+        }
     }
     // Error handling: if no user. Need lock on map?
     {
-        boost::unique_lock<boost::mutex> lock_user(users_lock);
+        boost::unique_lock<boost::mutex> lock_user(mem_lock);
         if(users.find(user) == users.end()){
             close(connect_sock);
             return;
@@ -520,6 +508,10 @@ void handle_request(int connect_sock){
     std::string reconstrunction = "";
     unsigned session, seq;
     request_ss >> request_type >> session >> seq;
+    if (request_type != "FS_SESSION" && request_type != "FS_READBLOCK" && request_type != "FS_WRITEBLOCK" && request_type != "FS_CREATE" && request_type != "FS_DELETE"){
+        close(connect_sock);
+        return;
+    }
     int ck1 = session_owner_check(request_type ,user, session, seq);
     // std::cout << ck1 << std::endl;
     if(ck1 < 0){
@@ -535,16 +527,13 @@ void handle_request(int connect_sock){
             return;
         }
         //create a session lock needed?
-        {
-            boost::unique_lock<boost::mutex> lock_user_session(user_session_lock);
-            user_session[user].insert(session_num);
-        }
         std::string response;
         {
-            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
+            boost::unique_lock<boost::mutex> lock_user_session(mem_lock);
+            user_session[user].insert(session_num);
             session_seq[session_num] = seq;
+            response = std::to_string(session_num++) + ' ' + std::to_string(seq) + '\0';
         }
-        response = std::to_string(session_num++) + ' ' + std::to_string(seq) + '\0';
         //send response
         send_response(response, user, connect_sock);
     }
@@ -560,15 +549,8 @@ void handle_request(int connect_sock){
             return;
         }
         if (filename_check(pathname) < 0 || block >= FS_MAXFILEBLOCKS){
-            cout_lock.lock();
-            std::cout << "ERROR: INVALID PATHNAME OR BLOCK NUM" <<std::endl;
-            cout_lock.unlock();
             close(connect_sock);
             return;
-        }
-        {
-            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
-            session_seq[session] = seq;
         }
         if( fs_read_handler(pathname, user, block, session, seq, connect_sock) == -1)
             close(connect_sock);
@@ -589,15 +571,8 @@ void handle_request(int connect_sock){
             return;
         }
         if (filename_check(pathname) < 0 || block >= FS_MAXFILEBLOCKS || text.size() > FS_BLOCKSIZE){
-            cout_lock.lock();
-            std::cout << "ERROR: INVALID PATHNAME OR BLOCK NUM" <<std::endl;
-            cout_lock.unlock();
             close(connect_sock);
             return;
-        }
-        {
-            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
-            session_seq[session] = seq;
         }
         // std::cout << text << std::endl;
         if(fs_write_handler(text, pathname, user, block, session, seq, connect_sock) == -1)
@@ -616,19 +591,12 @@ void handle_request(int connect_sock){
             return;
         }
         if (filename_check(pathname) < 0){
-            cout_lock.lock();
-            std::cout << "ERROR: INVALID PATHNAME" <<std::endl;
-            cout_lock.unlock();
             close(connect_sock);
             return;
         }
         if( file_type != 'd' && file_type != 'f' ){
             close(connect_sock);
             return;
-        }
-        {
-            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
-            session_seq[session] = seq;
         }
         if( fs_create_handler(pathname, user, file_type, session, seq, connect_sock) == -1)
             close(connect_sock);
@@ -645,24 +613,11 @@ void handle_request(int connect_sock){
             return;
         }
         if (filename_check(pathname) < 0){
-            cout_lock.lock();
-            std::cout << "ERROR: INVALID PATHNAME" <<std::endl;
-            cout_lock.unlock();
             close(connect_sock);
             return;
         }
-        {
-            boost::unique_lock<boost::mutex> lock_seseq(session_seq_lock);
-            session_seq[session] = seq;
-        }
         if (fs_delete_handler(pathname, user, session, seq, connect_sock ) == -1)
             close(connect_sock);
-    }else{
-        cout_lock.lock();
-        std::cout << "ERROR: UNKNOWN REQUEST TYPE." <<std::endl;
-        cout_lock.unlock();
-        close(connect_sock);
-        return;
     }
 }
 
@@ -681,9 +636,6 @@ int main( int argc, char* argv[] ){
     }else if( argc == 2){
         server_port = atoi(argv[1]);
     }else{
-        cout_lock.lock();
-        std::cout << " wrong commnad line args " << std::endl;
-        cout_lock.unlock();
         exit(1);
     }
     //read disk blocks
@@ -691,17 +643,10 @@ int main( int argc, char* argv[] ){
         avail_disk_blocks.insert(i);
     }
     get_fs_init_blocks(0);
-    cout_lock.lock();
-    std::cout << avail_disk_blocks.size() << std::endl;
-    cout_lock.unlock();
     // Create the listening socket
     int listen_sock = create_listen_socket(server_port);
     if (listen_sock == -1)
-    {
-        cout_lock.lock();
-        std::cout << "Failed to create listening socket" << std::endl;
-        cout_lock.unlock();
-    }
+        return 0;
     // Start to listen to requests. Queue size is 30.
     listen(listen_sock, 30);
 
