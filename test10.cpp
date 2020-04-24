@@ -44,7 +44,7 @@ int main(int argc, char *argv[])
     memset(entries,0,FS_BLOCKSIZE);
     char fname[] = "Thisisafakedir\0";
     memcpy(entries, fname, 60);
-    *((uint32_t *)(entries + 60)) = 4095;
+    // *((uint32_t *)(entries + 60)) = 4095;
     fs_writeblock("user1", "password1", session, seq++, "/dir5",0, entries);
     fs_writeblock("user1", "password1", session, seq++, "/dir5",1, writedata);
     fs_writeblock("user1", "password1", session, seq++, "/dir5",2, writedata);

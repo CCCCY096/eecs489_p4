@@ -526,7 +526,10 @@ void handle_request(int connect_sock){
             close(connect_sock);
             return;
         }
-        //create a session lock needed?
+        if (session != 0 ){
+            close(connect_sock);
+            return;
+        }
         std::string response;
         {
             boost::unique_lock<boost::mutex> lock_user_session(mem_lock);
@@ -644,6 +647,7 @@ int main( int argc, char* argv[] ){
     }
     get_fs_init_blocks(0);
     // Create the listening socket
+    std::cout << avail_disk_blocks.size() << std::endl;
     int listen_sock = create_listen_socket(server_port);
     if (listen_sock == -1)
         return 0;
